@@ -12,7 +12,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import CareerCard from "@/components/career/CareerCard";
-import { ArrowLeft, ArrowRight, Sparkles, Loader2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Sparkles, Loader2, AlertCircle } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 const educationLevels = [
   { value: "high-school", label: "High School" },
@@ -50,54 +51,25 @@ const skillOptions = [
   "Web Development",
 ];
 
-const mockCareers = [
-  {
-    id: "data-scientist",
-    name: "Data Scientist",
-    description: "Analyze complex data to help organizations make better decisions. High demand in India's growing tech sector.",
-    fitScore: 92,
-    skills: ["Python", "Machine Learning", "SQL", "Statistics"],
-    avgSalary: "₹12-25 LPA",
-    demand: "High" as const,
-    timeToLearn: "6-9 months",
-  },
-  {
-    id: "full-stack-developer",
-    name: "Full Stack Developer",
-    description: "Build complete web applications from frontend to backend. Endless opportunities in startups and MNCs.",
-    fitScore: 87,
-    skills: ["JavaScript", "React", "Node.js", "Databases"],
-    avgSalary: "₹8-20 LPA",
-    demand: "High" as const,
-    timeToLearn: "4-6 months",
-  },
-  {
-    id: "product-manager",
-    name: "Product Manager",
-    description: "Lead product strategy and work with engineering teams. Perfect for those who love both tech and business.",
-    fitScore: 78,
-    skills: ["Communication", "Analytics", "Strategy", "Leadership"],
-    avgSalary: "₹15-35 LPA",
-    demand: "High" as const,
-    timeToLearn: "3-5 months",
-  },
-  {
-    id: "ml-engineer",
-    name: "ML Engineer",
-    description: "Build and deploy machine learning models at scale. The future of AI starts here.",
-    fitScore: 74,
-    skills: ["Python", "TensorFlow", "MLOps", "Data Engineering"],
-    avgSalary: "₹15-30 LPA",
-    demand: "High" as const,
-    timeToLearn: "8-12 months",
-  },
-];
+interface Career {
+  id: string;
+  name: string;
+  description: string;
+  fitScore: number;
+  skills: string[];
+  avgSalary: string;
+  demand: "High" | "Medium" | "Low";
+  timeToLearn: string;
+}
 
 const Assessment = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [step, setStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedCareer, setSelectedCareer] = useState<string | null>(null);
+  const [careers, setCareers] = useState<Career[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     education: "",
@@ -128,10 +100,59 @@ const Assessment = () => {
 
   const handleSubmit = async () => {
     setIsLoading(true);
-    // Simulate AI processing
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    setIsLoading(false);
-    setStep(3);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/career-recommend`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+          },
+          body: JSON.stringify({ profile: formData }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        
+        if (response.status === 429) {
+          throw new Error("Too many requests. Please wait a moment and try again.");
+        }
+        if (response.status === 402) {
+          throw new Error("AI service temporarily unavailable. Please try again later.");
+        }
+        
+        throw new Error(errorData.error || "Failed to get recommendations");
+      }
+
+      const data = await response.json();
+      
+      if (!data.careers || data.careers.length === 0) {
+        throw new Error("No career recommendations received");
+      }
+
+      setCareers(data.careers);
+      setStep(3);
+      
+      toast({
+        title: "Analysis Complete!",
+        description: `Found ${data.careers.length} career matches for you.`,
+      });
+
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Something went wrong";
+      setError(errorMessage);
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleCareerSelect = (careerId: string) => {
@@ -173,6 +194,17 @@ const Assessment = () => {
             />
           </div>
         </div>
+
+        {/* Error Alert */}
+        {error && step === 2 && (
+          <div className="mb-6 p-4 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium text-destructive">Something went wrong</p>
+              <p className="text-sm text-muted-foreground">{error}</p>
+            </div>
+          </div>
+        )}
 
         {/* Step 1: Education & Interests */}
         {step === 1 && (
@@ -280,16 +312,16 @@ const Assessment = () => {
             <div className="text-center mb-8">
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-success/10 text-success text-sm font-medium mb-4">
                 <Sparkles className="h-4 w-4" />
-                Analysis Complete!
+                AI Analysis Complete!
               </div>
-              <h2 className="text-2xl font-bold mb-2">Your Recommended Careers</h2>
+              <h2 className="text-2xl font-bold mb-2">Your Personalized Career Matches</h2>
               <p className="text-muted-foreground">
-                Based on your profile, here are the best career matches for you.
+                Based on your profile, here are the best career matches recommended by AI.
               </p>
             </div>
 
             <div className="grid md:grid-cols-2 gap-6 mb-8">
-              {mockCareers.map((career) => (
+              {careers.map((career) => (
                 <CareerCard
                   key={career.id}
                   career={career}
@@ -302,7 +334,7 @@ const Assessment = () => {
             {selectedCareer && (
               <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 text-center animate-scale-in">
                 <p className="text-sm text-muted-foreground mb-3">
-                  You've selected <strong className="text-foreground">{mockCareers.find(c => c.id === selectedCareer)?.name}</strong>
+                  You've selected <strong className="text-foreground">{careers.find(c => c.id === selectedCareer)?.name}</strong>
                 </p>
                 <Button variant="hero" size="lg" onClick={handleConfirmCareer}>
                   View Learning Roadmap
@@ -334,12 +366,12 @@ const Assessment = () => {
                 {isLoading ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Analyzing...
+                    AI is Analyzing...
                   </>
                 ) : (
                   <>
                     <Sparkles className="h-4 w-4" />
-                    Get Recommendations
+                    Get AI Recommendations
                   </>
                 )}
               </Button>
