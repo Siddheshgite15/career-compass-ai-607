@@ -1,84 +1,95 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Checkbox } from "@/components/ui/checkbox";
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import CareerCard from "@/components/career/CareerCard";
-import { ArrowLeft, ArrowRight, Sparkles, Loader2, AlertCircle } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
+} from '@/components/ui/select';
+import CareerCard from '@/components/career/CareerCard';
+import { ArrowLeft, ArrowRight, Sparkles, Loader2, AlertCircle } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
+import { geminiService } from '@/services/gemini';
+import { CareerRecommendation, AssessmentData } from '@/types/career';
+import { useAuth } from '@/contexts/AuthContext';
+import { authService } from '@/services/authService';
 
 const educationLevels = [
-  { value: "high-school", label: "High School" },
-  { value: "undergraduate", label: "Undergraduate (Pursuing)" },
-  { value: "graduate", label: "Graduate" },
-  { value: "post-graduate", label: "Post Graduate" },
-  { value: "self-taught", label: "Self-Taught" },
+  { value: 'high-school', label: 'High School' },
+  { value: 'undergraduate', label: 'Undergraduate (Pursuing)' },
+  { value: 'graduate', label: 'Graduate' },
+  { value: 'post-graduate', label: 'Post Graduate' },
+  { value: 'self-taught', label: 'Self-Taught' },
 ];
 
 const interestOptions = [
-  "Technology & Programming",
-  "Data & Analytics",
-  "Design & Creativity",
-  "Business & Management",
-  "Marketing & Sales",
-  "Healthcare & Medicine",
-  "Finance & Banking",
-  "Education & Training",
-  "Research & Science",
-  "Media & Content Creation",
+  'Technology & Programming',
+  'Data & Analytics',
+  'Design & Creativity',
+  'Business & Management',
+  'Marketing & Sales',
+  'Healthcare & Medicine',
+  'Finance & Banking',
+  'Education & Training',
+  'Research & Science',
+  'Media & Content Creation',
 ];
 
-const skillOptions = [
-  "Python",
-  "JavaScript",
-  "Java",
-  "SQL",
-  "Excel",
-  "Communication",
-  "Problem Solving",
-  "Leadership",
-  "Creativity",
-  "Data Analysis",
-  "Machine Learning",
-  "Web Development",
-];
-
-interface Career {
-  id: string;
-  name: string;
-  description: string;
-  fitScore: number;
-  skills: string[];
-  avgSalary: string;
-  demand: "High" | "Medium" | "Low";
-  timeToLearn: string;
-}
+// Dynamic skills based on interests
+const skillsByInterest: Record<string, string[]> = {
+  'Technology & Programming': ['Python', 'JavaScript', 'Java', 'C++', 'React', 'Node.js', 'Git', 'SQL'],
+  'Data & Analytics': ['Python', 'SQL', 'Excel', 'Tableau', 'Machine Learning', 'Statistics', 'Data Visualization'],
+  'Design & Creativity': ['Figma', 'Adobe Photoshop', 'Illustrator', 'UI/UX Design', 'Typography', 'Color Theory'],
+  'Business & Management': ['Leadership', 'Project Management', 'Strategic Planning', 'Communication', 'Excel', 'Business Analysis'],
+  'Marketing & Sales': ['Digital Marketing', 'SEO', 'Content Writing', 'Social Media', 'Communication', 'Analytics'],
+  'Healthcare & Medicine': ['Medical Terminology', 'Patient Care', 'Clinical Skills', 'Anatomy', 'Pharmacology'],
+  'Finance & Banking': ['Financial Analysis', 'Excel', 'Accounting', 'Risk Management', 'Investment Analysis'],
+  'Education & Training': ['Teaching', 'Curriculum Development', 'Communication', 'Presentation Skills', 'Patience'],
+  'Research & Science': ['Research Methods', 'Data Analysis', 'Critical Thinking', 'Lab Skills', 'Statistics'],
+  'Media & Content Creation': ['Video Editing', 'Writing', 'Photography', 'Adobe Premiere', 'Storytelling'],
+};
 
 const Assessment = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user, refreshProfile } = useAuth();
   const [step, setStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedCareer, setSelectedCareer] = useState<string | null>(null);
-  const [careers, setCareers] = useState<Career[]>([]);
+  const [careers, setCareers] = useState<CareerRecommendation[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
-    education: "",
+    education: '',
     interests: [] as string[],
     skills: [] as string[],
-    goals: "",
+    goals: '',
+    learningPace: 'moderate' as 'slow' | 'moderate' | 'fast',
+    dailyTimeCommitment: 2,
+    preferredLanguage: 'hinglish' as 'english' | 'hindi' | 'hinglish',
   });
 
   const totalSteps = 3;
+
+  // Get relevant skills based on selected interests
+  const getRelevantSkills = (): string[] => {
+    if (formData.interests.length === 0) {
+      return ['Communication', 'Problem Solving', 'Leadership', 'Creativity', 'Teamwork'];
+    }
+
+    const skills = new Set<string>();
+    formData.interests.forEach((interest) => {
+      const interestSkills = skillsByInterest[interest] || [];
+      interestSkills.forEach((skill) => skills.add(skill));
+    });
+
+    return Array.from(skills);
+  };
 
   const handleInterestToggle = (interest: string) => {
     setFormData((prev) => ({
@@ -86,6 +97,7 @@ const Assessment = () => {
       interests: prev.interests.includes(interest)
         ? prev.interests.filter((i) => i !== interest)
         : [...prev.interests, interest],
+      skills: [], // Reset skills when interests change
     }));
   };
 
@@ -103,52 +115,44 @@ const Assessment = () => {
     setError(null);
 
     try {
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/career-recommend`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-          },
-          body: JSON.stringify({ profile: formData }),
-        }
-      );
+      // Create assessment data
+      const assessmentData: AssessmentData = {
+        interests: formData.interests,
+        skills: formData.skills,
+        education: formData.education,
+        goals: formData.goals,
+        learningStyle: formData.learningPace,
+        dailyHours: formData.dailyTimeCommitment,
+        // Provide default aptitude scores (since we don't collect them via quiz)
+        aptitudeScores: {
+          logical: 70,
+          creative: 70,
+          analytical: 70,
+          communication: 70,
+        },
+      };
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        
-        if (response.status === 429) {
-          throw new Error("Too many requests. Please wait a moment and try again.");
-        }
-        if (response.status === 402) {
-          throw new Error("AI service temporarily unavailable. Please try again later.");
-        }
-        
-        throw new Error(errorData.error || "Failed to get recommendations");
+      // Get AI recommendations
+      const recommendations = await geminiService.recommendCareers(assessmentData);
+
+      if (!recommendations || recommendations.length === 0) {
+        throw new Error('No career recommendations received');
       }
 
-      const data = await response.json();
-      
-      if (!data.careers || data.careers.length === 0) {
-        throw new Error("No career recommendations received");
-      }
-
-      setCareers(data.careers);
+      setCareers(recommendations);
       setStep(3);
-      
-      toast({
-        title: "Analysis Complete!",
-        description: `Found ${data.careers.length} career matches for you.`,
-      });
 
+      toast({
+        title: 'Analysis Complete!',
+        description: `Found ${recommendations.length} career matches for you.`,
+      });
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Something went wrong";
+      const errorMessage = err instanceof Error ? err.message : 'Something went wrong';
       setError(errorMessage);
       toast({
-        title: "Error",
+        title: 'Error',
         description: errorMessage,
-        variant: "destructive",
+        variant: 'destructive',
       });
     } finally {
       setIsLoading(false);
@@ -159,9 +163,45 @@ const Assessment = () => {
     setSelectedCareer(careerId);
   };
 
-  const handleConfirmCareer = () => {
-    if (selectedCareer) {
+  const handleConfirmCareer = async () => {
+    if (!selectedCareer || !user) return;
+
+    const selected = careers.find((c) => c.id === selectedCareer);
+    if (!selected) return;
+
+    try {
+      // Save assessment to backend
+      await authService.saveCareerAssessment({
+        selectedCareer: {
+          careerId: selected.id,
+          careerName: selected.name,
+          domain: selected.domain,
+          specialization: selected.specializations?.[0] || '',
+          fitScore: selected.fitScore.overall,
+          assessmentResults: {
+            interestScore: selected.fitScore.breakdown.interest,
+            aptitudeScore: selected.fitScore.breakdown.aptitude,
+            personalityFit: selected.fitScore.breakdown.learningStyle,
+            marketAlignment: selected.fitScore.breakdown.market,
+          },
+        },
+        assessmentData: formData,
+      });
+
+      await refreshProfile();
+
+      toast({
+        title: 'Career Selected!',
+        description: `Your personalized ${selected.name} roadmap is ready.`,
+      });
+
       navigate(`/roadmap/${selectedCareer}`);
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to save your selection. Please try again.',
+        variant: 'destructive',
+      });
     }
   };
 
@@ -176,8 +216,10 @@ const Assessment = () => {
     }
   };
 
+  const relevantSkills = getRelevantSkills();
+
   return (
-    <div className="min-h-screen py-8">
+    <div className="min-h-screen py-8 bg-gradient-to-br from-blue-50 via-white to-purple-50">
       <div className="container max-w-3xl">
         {/* Progress Header */}
         <div className="mb-8">
@@ -208,7 +250,7 @@ const Assessment = () => {
 
         {/* Step 1: Education & Interests */}
         {step === 1 && (
-          <div className="bg-card rounded-2xl border border-border p-6 md:p-8 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-border shadow-lg p-6 md:p-8 animate-fade-in">
             <h2 className="text-xl font-semibold mb-6">Tell us about yourself</h2>
 
             <div className="space-y-6">
@@ -234,16 +276,18 @@ const Assessment = () => {
               </div>
 
               <div className="space-y-3">
-                <Label>What areas interest you? (Select all that apply)</Label>
+                <Label>What areas interest you? (Select at least 1)</Label>
+                <p className="text-xs text-muted-foreground">
+                  💡 Select based on what you enjoy - this helps us show relevant skills in the next step
+                </p>
                 <div className="grid grid-cols-2 gap-3">
                   {interestOptions.map((interest) => (
                     <div
                       key={interest}
-                      className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-                        formData.interests.includes(interest)
-                          ? "border-primary bg-primary/5"
-                          : "border-border hover:border-primary/50"
-                      }`}
+                      className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${formData.interests.includes(interest)
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:border-primary/50'
+                        }`}
                       onClick={() => handleInterestToggle(interest)}
                     >
                       <Checkbox
@@ -261,22 +305,26 @@ const Assessment = () => {
 
         {/* Step 2: Skills & Goals */}
         {step === 2 && (
-          <div className="bg-card rounded-2xl border border-border p-6 md:p-8 animate-fade-in">
-            <h2 className="text-xl font-semibold mb-6">Skills & Career Goals</h2>
+          <div className="bg-white rounded-2xl border border-border shadow-lg p-6 md:p-8 animate-fade-in">
+            <h2 className="text-xl font-semibond mb-6">Skills & Career Goals</h2>
 
             <div className="space-y-6">
               <div className="space-y-3">
                 <Label>What skills do you already have?</Label>
+                <p className="text-xs text-muted-foreground">
+                  {formData.interests.length > 0
+                    ? `Based on your interests (${formData.interests.join(', ')}), here are relevant skills:`
+                    : 'Select your interests first to see relevant skills'}
+                </p>
                 <div className="flex flex-wrap gap-2">
-                  {skillOptions.map((skill) => (
+                  {relevantSkills.map((skill) => (
                     <button
                       key={skill}
                       onClick={() => handleSkillToggle(skill)}
-                      className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
-                        formData.skills.includes(skill)
-                          ? "gradient-primary text-primary-foreground"
-                          : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                      }`}
+                      className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${formData.skills.includes(skill)
+                        ? 'gradient-primary text-primary-foreground'
+                        : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
+                        }`}
                     >
                       {skill}
                     </button>
@@ -322,19 +370,33 @@ const Assessment = () => {
 
             <div className="grid md:grid-cols-2 gap-6 mb-8">
               {careers.map((career) => (
-                <CareerCard
+                <div
                   key={career.id}
-                  career={career}
-                  onSelect={handleCareerSelect}
-                  selected={selectedCareer === career.id}
-                />
+                  onClick={() => handleCareerSelect(career.id)}
+                  className={`cursor-pointer p-6 rounded-xl border-2 transition-all ${selectedCareer === career.id
+                    ? 'border-primary bg-primary/5'
+                    : 'border-border hover:border-primary/50'
+                    }`}
+                >
+                  <h3 className="text-lg font-semibold mb-2">{career.name}</h3>
+                  <p className="text-sm text-muted-foreground mb-4">{career.description}</p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-2xl font-bold text-primary">{career.fitScore.overall}%</span>
+                    <span className="text-xs px-2 py-1 rounded-full bg-secondary">
+                      {career.domain}
+                    </span>
+                  </div>
+                </div>
               ))}
             </div>
 
             {selectedCareer && (
               <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 text-center animate-scale-in">
                 <p className="text-sm text-muted-foreground mb-3">
-                  You've selected <strong className="text-foreground">{careers.find(c => c.id === selectedCareer)?.name}</strong>
+                  You've selected{' '}
+                  <strong className="text-foreground">
+                    {careers.find((c) => c.id === selectedCareer)?.name}
+                  </strong>
                 </p>
                 <Button variant="hero" size="lg" onClick={handleConfirmCareer}>
                   View Learning Roadmap
